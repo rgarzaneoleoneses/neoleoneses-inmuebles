@@ -1,0 +1,58 @@
+name: Importar versión 0.8.9
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/import-v089.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: import-v089
+  cancel-in-progress: false
+jobs:
+  import:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Descargar y validar la copia publicada
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 'https://neoleoneses-inmuebles.vercel.app/descargas/Neoleoneses_Inmuebles_v0.8.9.zip?v=verified' -o "$RUNNER_TEMP/neo.zip"
+          printf '%s  %s\n' '13c769a6116a5350e8af6877e5733dc3f9ade2cb768cf682a683c51c4aea39f7' "$RUNNER_TEMP/neo.zip" | sha256sum -c -
+          python3 - <<'PY'
+          import os, hashlib, json, zipfile
+          from pathlib import Path
+          z = zipfile.ZipFile(Path(os.environ['RUNNER_TEMP']) / 'neo.zip')
+          assert z.testzip() is None
+          names = z.namelist()
+          images = [n for n in names if n.startswith('photos/') and n.endswith('.jpg') and len(Path(n).parts)==2]
+          assert len(images)==28 and len(set(images))==28
+          html=z.read('index.html')
+          municipalities=z.read('municipios-nl.json')
+          assert hashlib.sha256(html).hexdigest()=='d83961fa60003320f187a00c9242c8b5ec8b3679cfa9ae2e80445e8aa5ef45b7'
+          assert hashlib.sha256(municipalities).hexdigest()=='bd067135aecccb256f4a7e0b062ab151644ff28221ce3d1e7f2d43cdf3d24ede'
+          data=json.loads(municipalities)
+          assert len(data if isinstance(data,list) else data['features'])==51
+          for n in ['index.html','municipios-nl.json','vercel.json']+images:
+              p=Path(n)
+              assert not p.is_absolute() and '..' not in p.parts
+              if p.exists():
+                  assert p.read_bytes()==z.read(n), f'No se sobrescribe un archivo modificado: {n}'
+              p.parent.mkdir(parents=True,exist_ok=True)
+              p.write_bytes(z.read(n))
+          Path('docs').mkdir(exist_ok=True)
+          Path('docs/README-original.md').write_bytes(z.read('README.md'))
+          print('Verificados: código, 51 municipios y 28 imágenes.')
+          PY
+      - name: Guardar la versión en GitHub
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- index.html municipios-nl.json vercel.json photos docs/README-original.md
+          if git diff --cached --quiet; then
+            echo "La copia ya está en el repositorio."
+          else
+            git commit -m "Importar código y fotografías verificados de Neoleoneses Inmuebles v0.8.9"
+            git push origin HEAD:main
+          fi
